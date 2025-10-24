@@ -343,7 +343,7 @@ async def scrape_category_with_debug(listing_url: str, mapped_category: str):
                 local_dt = dt.astimezone(TIMEZONE)
                 if local_dt.date() != datetime.now(TIMEZONE).date():
                     logger.info("Not today's article (%s); skipping %s", local_dt.date(), href)
-                    continue
+                    break
 
                 published_iso = local_dt.isoformat()
 

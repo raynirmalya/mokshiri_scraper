@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """
-kbizoom_to_sql.py
+koreatech_startup_to_sql.py
 
-Scrape today's articles (k-pop, k-drama, celebrity) from kbizoom, rewrite title+summary via GPT rewriter,
+Scrape today's articles from KoreaTechDesk Startup category, rewrite title+summary via GPT rewriter,
 and store in 'articles' table using DB credentials from .env.
 
-Table columns (assumed existing):
-id int AUTO_INCREMENT PRIMARY KEY,
-category varchar(50),
-title varchar(500),
-link varchar(1000) UNIQUE,
-summary text,
-image_url varchar(1000),
-author varchar(255),
-published varchar(100),
-created_at datetime,
-views bigint,
-is_featured tinyint(1),
-featured_rank int,
-last_metrics_update datetime,
-trend_score double,
-uuid binary(16)
+Assumes an existing `articles` table with at least the columns used in the INSERT/UPSERT below.
+(See your example schema — adjust column lengths/types if needed.)
+
+Sample .env:
+DB_USER=youruser
+DB_PASS=yourpass
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_NAME=yourdb
+DB_SSL_MODE=DISABLED
+DB_SSL_CA=
+OPENAI_API_KEY=sk-...
+
+Usage:
+  pip install requests beautifulsoup4 python-dateutil pytz python-dotenv mysql-connector-python
+  python koreatech_startup_to_sql.py
 """
 
 import os
@@ -40,10 +40,10 @@ from dotenv import load_dotenv
 import mysql.connector
 from mysql.connector import pooling
 
-# ---- rewriter import: adjust if name differs ----
-# This function must return dict {"header":..., "summary":...}
-# e.g. from gpt_rewriter_balanced import rewrite_with_gpt_balanced
-from gpt_rewriter_expanded import rewrite_with_gpt_expanded
+# ---- GPT rewriter import (pluggable) ----
+# The rewriter must expose a function that takes (title, body) and returns {"header": new_title, "summary": new_summary}
+# Replace `gpt_rewriter_expanded` with your module (same as your kbizoom example).
+from gpt_rewriter_expanded import rewrite_with_gpt_expanded  # adjust import name if different
 
 # ---- Load env ----
 load_dotenv()
@@ -53,32 +53,30 @@ DB_PASS = os.getenv("DB_PASS")
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = int(os.getenv("DB_PORT", "3306"))
 DB_NAME = os.getenv("DB_NAME")
-DB_SSL_MODE = os.getenv("DB_SSL_MODE", "DISABLED").upper()  # DISABLED / PREFERRED / REQUIRED
-DB_SSL_CA = os.getenv("DB_SSL_CA")  # optional path to CA
+DB_SSL_MODE = os.getenv("DB_SSL_MODE", "DISABLED").upper()
+DB_SSL_CA = os.getenv("DB_SSL_CA")
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-# if your rewrite module needs OPENAI env, ensure it's present; else rewrite will handle errors.
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # optional for rewriter
 
 if not all([DB_USER, DB_PASS, DB_HOST, DB_NAME]):
-    raise SystemExit("Missing DB config in .env. Please set DB_USER, DB_PASS, DB_HOST, DB_NAME, DB_PORT (if custom).")
+    raise SystemExit("Missing DB config in .env. Please set DB_USER, DB_PASS, DB_HOST, DB_NAME.")
 
 # ---- Logging ----
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("kbizoom_to_sql")
-DOMAIN = "https://kbizoom.com"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("koreatech_startup_to_sql")
+
 # ---- Config ----
+DOMAIN = "https://koreatechdesk.com"
 START_PAGES = [
-    ("kpop", "https://kbizoom.com/k-pop/"),
-    ("kdrama", "https://kbizoom.com/k-drama/"),
-    ("kpop_celeb", "https://kbizoom.com/celebrity/"),
+    ("tech_startups", "https://koreatechdesk.com/category/startup/"),
 ]
-MAX_PAGES_PER_CATEGORY = 2
+MAX_PAGES_PER_CATEGORY = 3
 TIMEZONE = pytz.timezone("Asia/Kolkata")
 USER_AGENT = "Mozilla/5.0 (compatible; MokshiriScraper/1.0; +https://example.com/bot)"
 HEADERS = {"User-Agent": USER_AGENT}
 REQUEST_TIMEOUT = 12
-SLEEP_MIN = 1.0
-SLEEP_MAX = 2.0
+SLEEP_MIN = 0.8
+SLEEP_MAX = 1.8
 
 # ---- DB pool ----
 pool_args = {
@@ -87,11 +85,10 @@ pool_args = {
     "host": DB_HOST,
     "port": DB_PORT,
     "database": DB_NAME,
-    "pool_name": "kbizoom_pool",
+    "pool_name": "koreatech_pool",
     "pool_size": 5,
     "autocommit": False,
 }
-# Add SSL options if required
 if DB_SSL_MODE in ("REQUIRED", "PREFERRED") and DB_SSL_CA:
     pool_args["ssl_ca"] = DB_SSL_CA
 elif DB_SSL_MODE == "REQUIRED" and not DB_SSL_CA:
@@ -103,7 +100,7 @@ except Exception as e:
     logger.exception("Failed creating DB pool: %s", e)
     raise
 
-# ---- Helper funcs: fetch, scraping, parsing ----
+# ---- Helpers ----
 def fetch(url, session=None, retries=3):
     session = session or requests.Session()
     for attempt in range(1, retries + 1):
@@ -120,7 +117,7 @@ def fetch(url, session=None, retries=3):
 
 def looks_like_article_anchor(a, base_domain):
     txt = (a.get_text(" ", strip=True) or "")
-    if len(txt) < 20:
+    if len(txt) < 18:
         return False
     href = a.get("href")
     if not href:
@@ -128,9 +125,7 @@ def looks_like_article_anchor(a, base_domain):
     parsed = urlparse(href)
     if parsed.netloc and base_domain not in parsed.netloc:
         return False
-    path = parsed.path or ""
-    if "/20" in path or path.count("/") >= 2:
-        return True
+    # typical article links contain year or multiple path segments, but be permissive:
     return True
 
 def find_article_links(html, base_url):
@@ -148,8 +143,10 @@ def find_article_links(html, base_url):
                 continue
             text = a.get_text(" ", strip=True)
             low = text.lower()
-            if any(skip in low for skip in ("read more", "home", "category", "contact", "search")):
+            # skip common non-article anchors
+            if any(skip in low for skip in ("read more", "more", "home", "category", "contact", "search", "tag:")):
                 continue
+            # avoid short labels
             if len(text) < 20:
                 continue
             seen.add(href)
@@ -172,12 +169,13 @@ def extract_article_content(html):
     for sel in selectors:
         node = soup.select_one(sel)
         if node:
-            for junk in node.select("script, style, .share, .ads, .wp-block-embed"):
+            for junk in node.select("script, style, .share, .ads, .wp-block-embed, .related"):
                 junk.decompose()
             paragraphs = [p.get_text(" ", strip=True) for p in node.find_all("p")]
             text = " ".join([p for p in paragraphs if p])
             if text and len(text) > 40:
                 return text
+    # fallback: first paragraphs on page
     paragraphs = soup.find_all("p")
     if paragraphs:
         text = " ".join(p.get_text(" ", strip=True) for p in paragraphs[:10])
@@ -195,14 +193,16 @@ def extract_published_date(html):
                 return parsed
             except Exception:
                 pass
-    meta_keys = [
+    # try meta tags
+    meta_candidates = [
         ('meta', {'property': 'article:published_time'}),
         ('meta', {'name': 'pubdate'}),
         ('meta', {'name': 'publishdate'}),
         ('meta', {'name': 'timestamp'}),
         ('meta', {'name': 'date'}),
+        ('meta', {'name': 'DC.date.issued'}),
     ]
-    for tag, attrs in meta_keys:
+    for tag, attrs in meta_candidates:
         m = soup.find(tag, attrs=attrs)
         if m:
             val = m.get('content') or m.get('value') or ''
@@ -212,12 +212,11 @@ def extract_published_date(html):
                     return parsed
                 except Exception:
                     pass
-    # fallback: try to find a date-like string near top of article (less reliable)
+    # last resort: look for date-like strings near header
     header = soup.find(["h1","h2"])
     if header:
-        text = header.get_text(" ", strip=True)
         try:
-            parsed = dateparser.parse(text, fuzzy=False)
+            parsed = dateparser.parse(header.get_text(" ", strip=True), fuzzy=True)
             return parsed
         except Exception:
             pass
@@ -227,16 +226,15 @@ def is_published_today(dt):
     if dt is None:
         return False
     if dt.tzinfo is None:
-        # assume UTC when naive, then convert; better than skipping
         dt = pytz.UTC.localize(dt)
     local = dt.astimezone(TIMEZONE)
     return local.date() == datetime.now(TIMEZONE).date()
 
-# ---- DB insert function ----
+# ---- DB upsert ----
 def upsert_article(record):
     """
-    record keys: category, title, link, summary, image_url, author, published (iso), uuid_bytes
-    Uses ON DUPLICATE KEY UPDATE by link (assuming link unique)
+    record keys: category, title, link, summary, image_url, author, published, uuid_bytes, views, is_featured, featured_rank, trend_score
+    Uses ON DUPLICATE KEY UPDATE by link (assuming unique key on link).
     """
     conn = None
     try:
@@ -257,11 +255,11 @@ def upsert_article(record):
         """
         params = (
             record.get("category"),
-            record.get("title")[:500],
-            record.get("link")[:1000],
+            (record.get("title") or "")[:500],
+            (record.get("link") or "")[:1000],
             record.get("summary"),
-            record.get("image_url")[:1000],
-            record.get("author")[:255] if record.get("author") else None,
+            (record.get("image_url") or "")[:1000],
+            (record.get("author") or "")[:255],
             record.get("published"),
             record.get("views", 0),
             record.get("is_featured", 0),
@@ -286,20 +284,19 @@ def upsert_article(record):
         if conn:
             conn.close()
 
-# ---- Main flow: scrape categories ----
+# ---- Scrape flow ----
 def scrape_category_today(category_name, start_url, max_pages=2, max_articles=None):
     session = requests.Session()
     items = []
     page = 0
     url = start_url
     visited = set()
-
     while url and page < max_pages:
-        logger.info("Fetching listing %s page %d: %s", category_name, page+1, url)
+        logger.info("Fetching listing %s page %d: %s", category_name, page + 1, url)
         resp = fetch(url, session)
         links = find_article_links(resp.text, DOMAIN)
-        logger.info("Found %d candidate links", len(links))
-        # dedupe
+        logger.info("Found %d candidate links on listing", len(links))
+        # dedupe preserving order
         unique = []
         seen = set()
         for l in links:
@@ -312,22 +309,23 @@ def scrape_category_today(category_name, start_url, max_pages=2, max_articles=No
             if l["url"] in visited:
                 continue
             try:
-                logger.info("Fetching article page: %s", l["url"])
+                logger.info("Fetching article: %s", l["url"])
                 art = fetch(l["url"], session)
                 visited.add(l["url"])
                 dt = extract_published_date(art.text)
                 if not dt:
-                    logger.info("No date found, skipping %s", l["url"])
+                    logger.info("No date found; skipping: %s", l["url"])
                     continue
                 if not is_published_today(dt):
-                    logger.info("Article not from today (%s), skipping %s", dt, l["url"])
-                    break
-                summary = extract_article_content(art.text)
-                if not summary:
-                    logger.info("No summary extracted, skipping %s", l["url"])
+                    logger.info("Article not from today (%s); skipping: %s", dt, l["url"])
+                    # continue looking other links (do not break: other links may be today's)
                     continue
-                # image
+                summary = extract_article_content(art.text)
+                if not summary or len(summary) < 80:
+                    logger.info("No usable summary extracted; skipping: %s", l["url"])
+                    continue
                 soup = BeautifulSoup(art.text, "lxml")
+                # pick main image if present
                 img_tag = soup.select_one("div.entry-content img, article img, .post-content img, .single-content img")
                 image = ""
                 if img_tag:
@@ -336,22 +334,25 @@ def scrape_category_today(category_name, start_url, max_pages=2, max_articles=No
                         image = urljoin(DOMAIN, src)
                 # author best-effort
                 author = None
-                a_tag = soup.find(lambda t: t.name in ("span","a","div") and t.get("class") and any("author" in c or "byline" in c for c in t.get("class")))
-                if a_tag:
-                    author = a_tag.get_text(" ", strip=True)
+                author_selectors = [
+                    ".byline a", ".author", ".entry-author", ".posted-by", ".byline", ".meta-author"
+                ]
+                for sel in author_selectors:
+                    node = soup.select_one(sel)
+                    if node:
+                        author = node.get_text(" ", strip=True)
+                        break
                 # published iso
                 pub_iso = dt.astimezone(TIMEZONE).isoformat() if dt.tzinfo else TIMEZONE.localize(dt).isoformat()
-
-                # rewrite with GPT rewriter (ensures not shorter than original)
+                # rewrite via GPT rewriter (safe fallback to original)
                 try:
                     rew = rewrite_with_gpt_expanded(l["title"], summary)
                     new_title = rew.get("header") or l["title"]
                     new_summary = rew.get("summary") or summary
                 except Exception as e:
-                    logger.exception("Rewriter failed, using original: %s", e)
+                    logger.exception("Rewriter failed, using original content: %s", e)
                     new_title = l["title"]
                     new_summary = summary
-
                 rec = {
                     "category": category_name,
                     "title": new_title,
@@ -367,16 +368,13 @@ def scrape_category_today(category_name, start_url, max_pages=2, max_articles=No
                     "trend_score": 0.0,
                     "uuid_bytes": uuidlib.uuid4().bytes
                 }
-
                 items.append(rec)
-                logger.info("Collected article: %s (len summary %d)", new_title[:80], len(new_summary))
-                # small polite delay per article
+                logger.info("Collected article: %s (summary len %d)", new_title[:80], len(new_summary))
                 time.sleep(random.uniform(SLEEP_MIN, SLEEP_MAX))
             except Exception as e:
                 logger.exception("Failed processing link %s: %s", l["url"], e)
                 continue
-
-        # find next link (listing)
+        # pagination: try rel="next" or "older posts" anchors on the listing
         soup = BeautifulSoup(resp.text, "lxml")
         next_link = None
         a_next = soup.find("a", rel="next")
@@ -388,11 +386,9 @@ def scrape_category_today(category_name, start_url, max_pages=2, max_articles=No
                 if "older posts" in txt or txt == "older posts" or txt == "older":
                     next_link = urljoin(DOMAIN, a["href"])
                     break
-
         url = next_link
         page += 1
         time.sleep(random.uniform(SLEEP_MIN, SLEEP_MAX))
-
     return items
 
 def main():
@@ -400,7 +396,7 @@ def main():
     for cat, url in START_PAGES:
         try:
             collected = scrape_category_today(cat, url, max_pages=MAX_PAGES_PER_CATEGORY)
-            logger.info("Category %s: collected %d items", cat, len(collected))
+            logger.info("Category %s collected %d items", cat, len(collected))
             for rec in collected:
                 ok = upsert_article(rec)
                 if ok:
@@ -409,10 +405,9 @@ def main():
                     logger.warning("Failed to save: %s", rec["link"])
             all_collected.extend(collected)
         except Exception as e:
-            logger.exception("Failed category %s: %s", cat, e)
-
-    # At end, print JSON array of inserted records to stdout
-    print(json.dumps(all_collected, ensure_ascii=False, indent=2))
+            logger.exception("Category %s failed: %s", cat, e)
+    # print summary JSON to stdout for logging/cron capture
+    print(json.dumps([{"title": r["title"], "link": r["link"], "published": r["published"]} for r in all_collected], ensure_ascii=False, indent=2))
 
 if __name__ == "__main__":
     main()

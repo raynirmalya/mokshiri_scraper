@@ -336,7 +336,7 @@ async def scrape_listing(listing_url: str, mapped_category: str, dry_run: bool):
                 local_dt = dt.astimezone(TIMEZONE)
                 if local_dt.date() != datetime.now(TIMEZONE).date():
                     logger.info("Article not today's (%s); skipping %s", local_dt.date(), href)
-                    continue
+                    break
 
                 published_iso = local_dt.isoformat()
                 author = extract_author_from_article(art_html) or ""
