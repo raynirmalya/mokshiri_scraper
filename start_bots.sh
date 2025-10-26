@@ -3,6 +3,13 @@
 sessname="mokshiri"
 scripts=(
     "/root/code/mokshiri-scrapes/scrapers/kbizoom_scraper.py"
+    "/root/code/mokshiri-scrapes/scrapers/kdramastars_scraper.py"
+    "/root/code/mokshiri-scrapes/scrapers/kpopmart_scraper.py"
+    "/root/code/mokshiri-scrapes/scrapers/kheralds_scraper.py"
+    "/root/code/mokshiri-scrapes/scrapers/koreatech_startup_scraper.py"
+    "/root/code/mokshiri-scrapes/scrapers/kpopmap_scraper.py"
+    "/root/code/mokshiri-scrapes/scrapers/soomi_scraper.py"
+    "/root/code/mokshiri-scrapes/scrapers/thepicktool_scraper.py"
 )
 
 # Create session
