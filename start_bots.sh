@@ -10,6 +10,7 @@ scripts=(
     "/root/code/mokshiri-scrapes/scrapers/kpopmap_scraper.py"
     "/root/code/mokshiri-scrapes/scrapers/soomi_scraper.py"
     "/root/code/mokshiri-scrapes/scrapers/thepicktool_scraper.py"
+    "/root/code/mokshiri-scrapes/batch_watermark_r2.py"
 )
 
 # Create session
