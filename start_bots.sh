@@ -36,7 +36,7 @@ done
 # Add a completion message
 run_chain+="echo '🎉 All scripts completed successfully at \$(date)!'; exec bash"
 
-# Send the full command chain to tmux
+# Send the command chain to tmux (evaluate inside session)
 tmux send-keys -t "$sessname":0 "$run_chain" Enter
 
 # Info to user
