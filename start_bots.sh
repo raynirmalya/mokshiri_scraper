@@ -2,15 +2,15 @@
 
 sessname="mokshiri"
 scripts=(
-    "/root/code/mokshiri-scrapes/scrapers/kbizoom_scraper.py"
-    "/root/code/mokshiri-scrapes/scrapers/kdramastars_scraper.py"
-    "/root/code/mokshiri-scrapes/scrapers/kpopmart_scraper.py"
-    "/root/code/mokshiri-scrapes/scrapers/kheralds_scraper.py"
-    "/root/code/mokshiri-scrapes/scrapers/koreatech_startup_scraper.py"
-    "/root/code/mokshiri-scrapes/scrapers/kpopmap_scraper.py"
-    "/root/code/mokshiri-scrapes/scrapers/soomi_scraper.py"
-    "/root/code/mokshiri-scrapes/scrapers/thepicktool_scraper.py"
-    "/root/code/mokshiri-scrapes/batch_watermark_r2.py"
+    "/root/code/mokshiri_scraper/scrapers/kbizoom_scraper.py"
+    "/root/code/mokshiri_scraper/scrapers/kdramastars_scraper.py"
+    "/root/code/mokshiri_scraper/scrapers/kpopmart_scraper.py"
+    "/root/code/mokshiri_scraper/scrapers/kheralds_scraper.py"
+    "/root/code/mokshiri_scraper/scrapers/koreatech_startup_scraper.py"
+    "/root/code/mokshiri_scraper/scrapers/kpopmap_scraper.py"
+    "/root/code/mokshiri_scraper/scrapers/soomi_scraper.py"
+    "/root/code/mokshiri_scraper/scrapers/thepicktool_scraper.py"
+    "/root/code/mokshiri_scraper/batch_watermark_r2.py"
 )
 
 # Create session
