@@ -13,25 +13,27 @@ scripts=(
     "/root/code/mokshiri_scraper/batch_watermark_r2.py"
 )
 
-# Create session
-tmux new-session -d -s "$sessname"
+# Kill any existing session with same name
+tmux has-session -t "$sessname" 2>/dev/null
+if [ $? -eq 0 ]; then
+    echo "Killing existing tmux session: $sessname"
+    tmux kill-session -t "$sessname"
+fi
 
-# Run each script in separate windows
-for i in "${!scripts[@]}"; do
-    script_path="${scripts[$i]}"
-    script_name=$(basename "$script_path" .py)
-    
-    if [ $i -eq 0 ]; then
-        # First script uses initial window
-        tmux rename-window -t "$sessname":0 "$script_name"
-        tmux send-keys -t "$sessname":0 "python3 $script_path" Enter
-    else
-        # Additional scripts get new windows
-        tmux new-window -t "$sessname":$i -n "$script_name"
-        tmux send-keys -t "$sessname":$i "python3 $script_path" Enter
-    fi
+# Create new tmux session (detached)
+tmux new-session -d -s "$sessname" -n "runner"
+
+# Build the command chain to run scripts one by one
+run_chain=""
+for script_path in "${scripts[@]}"; do
+    run_chain+="python3 $script_path; "
 done
+# Add a message when done
+run_chain+="echo '✅ All scripts completed successfully!'; exec bash"
+
+# Send the combined command chain to tmux
+tmux send-keys -t "$sessname":0 "$run_chain" Enter
 
 date
-echo "Started ${#scripts[@]} scripts in tmux session: $sessname"
-echo "Attach with: tmux attach -t $sessname"
+echo "Started sequential execution of ${#scripts[@]} scripts in tmux session: $sessname"
+echo "Attach anytime with: tmux attach -t $sessname"
