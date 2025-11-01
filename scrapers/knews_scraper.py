@@ -32,8 +32,7 @@ load_dotenv()
 LISTINGS = {
     "https://www.k-ennews.com/news/articleList.html?sc_section_code=S1N1&view_type=tm": "kpop",
     "https://www.k-ennews.com/news/articleList.html?sc_section_code=S1N2&view_type=tm": "kdrama",
-    "https://www.k-ennews.com/news/articleList.html?sc_section_code=S1N3&view_type=tm": "kpop_celeb",
-    "https://www.k-ennews.com/news/articleList.html?sc_section_code=S1N4&view_type=tm": "news"
+    "https://www.k-ennews.com/news/articleList.html?sc_section_code=S1N3&view_type=tm": "kpop_celeb"
 }
 
 MAX_PAGES = int(os.getenv("MAX_PAGES", "2"))
