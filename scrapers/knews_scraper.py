@@ -4,6 +4,7 @@ kennews_scraper.py
 
 Scrapes k-ennews listing pages and upserts into MySQL `articles`.
 Robust anchor extraction for k-ennews (href, onclick, data-idxno, parent nodes).
+Improved title extraction: prefer og:title / <title> / <h1> before falling back to anchor text.
 """
 
 import os
@@ -32,7 +33,8 @@ load_dotenv()
 LISTINGS = {
     "https://www.k-ennews.com/news/articleList.html?sc_section_code=S1N1&view_type=tm": "kpop",
     "https://www.k-ennews.com/news/articleList.html?sc_section_code=S1N2&view_type=tm": "kdrama",
-    "https://www.k-ennews.com/news/articleList.html?sc_section_code=S1N3&view_type=tm": "kpop_celeb"
+    "https://www.k-ennews.com/news/articleList.html?sc_section_code=S1N3&view_type=tm": "kpop_celeb",
+    "https://www.k-ennews.com/news/articleList.html?sc_section_code=S1N4&view_type=tm": "news"
 }
 
 MAX_PAGES = int(os.getenv("MAX_PAGES", "2"))
@@ -175,6 +177,97 @@ def extract_author(html: str) -> str:
     if byline:
         return re.sub(r"^\s*By\s+", "", byline.strip(), flags=re.I)
     return ""
+
+def extract_title(html: str, href: str = None) -> str:
+    """
+    Extract a clean title from article HTML.
+    Priority:
+      1. meta[property='og:title']
+      2. meta[name='title']
+      3. <title>
+      4. <h1> / <h2>
+      5. meta[name='twitter:title']
+      6. fallback: cleaned anchor text or cleaned URL segment
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 1. og:title
+    og = soup.find("meta", property="og:title")
+    if og and og.get("content"):
+        t = og.get("content").strip()
+        if t:
+            return clean_title(t)
+
+    # 2. meta name="title"
+    m = soup.find("meta", attrs={"name": "title"})
+    if m and m.get("content"):
+        t = m.get("content").strip()
+        if t:
+            return clean_title(t)
+
+    # 3. <title>
+    ttag = soup.find("title")
+    if ttag and ttag.get_text(strip=True):
+        t = ttag.get_text(" ", strip=True)
+        if t:
+            return clean_title(t)
+
+    # 4. main header
+    for header_tag in ("h1", "h2"):
+        h = soup.find(header_tag)
+        if h and h.get_text(strip=True):
+            return clean_title(h.get_text(" ", strip=True))
+
+    # 5. twitter:title
+    tw = soup.find("meta", attrs={"name": "twitter:title"})
+    if tw and tw.get("content"):
+        return clean_title(tw.get("content").strip())
+
+    # 6. fallbacks
+    # try to find any strong headline-like node
+    candidate = soup.find(lambda t: t.name in ("strong","b") and len(t.get_text(strip=True)) > 10)
+    if candidate:
+        return clean_title(candidate.get_text(" ", strip=True))
+
+    # 7. if we still have no title, try to derive a human-friendly label from href
+    if href:
+        parsed = urlparse(href)
+        # attempt to parse query idxno or path slug
+        qs = parse_qs(parsed.query)
+        if "idxno" in qs and qs["idxno"]:
+            # we don't want bare "articleView.html?idxno=..." as title; instead return "Article #<idxno>"
+            return f"Article #{qs['idxno'][0]}"
+        # try last path segment with dashes -> spaces
+        seg = parsed.path.rstrip("/").split("/")[-1] if parsed.path else ""
+        if seg and seg.lower().startswith("article"):
+            # don't return 'articleView.html'
+            # try to guess from other parts of path or return cleaned queryless path
+            return "K-En News Article"
+        if seg:
+            # replace hyphens/underscores with spaces and capitalize
+            seg_clean = re.sub(r"[-_]+", " ", seg)
+            seg_clean = re.sub(r"\.html$", "", seg_clean, flags=re.I)
+            seg_clean = seg_clean.replace("%20", " ").strip()
+            if len(seg_clean) > 3:
+                return clean_title(seg_clean)
+
+    # 8. ultimate fallback: generic label
+    return "K-En News Article"
+
+def clean_title(t: str) -> str:
+    """Normalize and trim a title string."""
+    if not t:
+        return t
+    t = t.strip()
+    # remove excessive whitespace and line breaks
+    t = re.sub(r"\s+", " ", t)
+    # remove trailing site name if present e.g. " - K-en News"
+    t = re.sub(r"\s*[-|–|—]\s*K[- ]?en News\s*$", "", t, flags=re.I)
+    t = re.sub(r"\s*[-|–|—]\s*K-En\s*News\s*$", "", t, flags=re.I)
+    # truncate to safe length
+    if len(t) > 500:
+        t = t[:480].rstrip() + "…"
+    return t
 
 # ---------- Helper: build page URL by adding page query param ----------
 def build_page_url(listing_url: str, page_num: int) -> str:
@@ -438,16 +531,14 @@ async def scrape_all_listings():
                         continue
                     seen_links.add(href)
                     if not text:
-                        text = href.split('/')[-1]
+                        text = ""  # keep empty so we prefer page-extracted title
                     candidates.append({"href": href, "text": text})
 
                 logger.info("Found %d candidate article links on listing page %s", len(candidates), url)
-                # logger.debug("RAW CANDIDATES: %s", candidates[:40])
 
                 # Visit each article candidate
                 for cand in candidates:
                     href = cand["href"]
-                    title = cand["text"] or ""
                     logger.info("Visiting article: %s", href)
                     try:
                         await page.goto(href, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
@@ -471,6 +562,9 @@ async def scrape_all_listings():
                         dt = pytz.UTC.localize(dt)
                     local_dt = dt.astimezone(TIMEZONE)
                     published_iso = local_dt.isoformat()
+
+                    # NEW: extract authoritative title from article page (not anchor text)
+                    title = extract_title(art_html, href)
 
                     category = mapped_cat or "news"
 
